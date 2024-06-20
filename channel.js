@@ -2,7 +2,7 @@ const { google } = require("googleapis");
 
 const youtube = google.youtube({
   version: "v3",
-  auth: "AIzaSyB7EafSnq2_7e7N2CHIgnE1QyPuE1AqrkY", // Replace with your actual API key
+  auth: "ENV", 
 });
 
 async function getChannelId(channelName) {
