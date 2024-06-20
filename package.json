@@ -1,0 +1,16 @@
+{
+  "name": "yt-transcript",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "googleapis": "^140.0.0",
+    "youtube-transcript": "^1.2.1"
+  }
+}
