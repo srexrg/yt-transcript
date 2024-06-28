@@ -7,7 +7,6 @@ const { google } = require("googleapis");
 const { BetaAnalyticsDataClient } = require("@google-analytics/data");
 const { AnalyticsAdminServiceClient } = require("@google-analytics/admin");
 
-
 const corsOptions = {
   origin: "http://localhost:5173",
   credentials: true,
@@ -17,7 +16,6 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// MongoDB connection
 mongoose
   .connect(
     "MONGO_URI"
@@ -25,7 +23,6 @@ mongoose
   .then(() => console.log("Connected to MongoDB"))
   .catch((err) => console.error("Error connecting to MongoDB:", err));
 
-// User model
 const User = mongoose.model(
   "User",
   new mongoose.Schema({
@@ -43,25 +40,33 @@ const oauth2Client = new OAuth2Client(
   "redirect_uri"
 );
 
-// Function to get the first GA4 property ID
 async function getFirstPropertyId(authClient) {
   const analyticsAdmin = new AnalyticsAdminServiceClient({
    keyFile:'credentials.json'
   });
 
   try {
+    console.log("Fetching GA4 accounts...");
+    const [accounts] = await analyticsAdmin.listAccountSummaries();
+    if (accounts && accounts.length > 0) {
+      const accountId = accounts[0].account.split("/")[1];
+      console.log("First Account ID:", accountId);
+
     console.log("Fetching GA4 properties...");
      const [properties] = await analyticsAdmin.listProperties({
-       filter: "parent:properties/-",
+        filter: `ancestor:accounts/${accountId}`,
      });
     console.log("Properties:", properties);
 
     if (properties && properties.length > 0) {
-      const propertyId = properties[0].name.split("/")[1];
+        const propertyId = properties[0].name.split("/")[1]; // Extract the property ID
       console.log("First Property ID:", propertyId);
       return propertyId;
     } else {
       console.log("No properties found");
+      }
+    } else {
+      console.log("No accounts found");
     }
   } catch (error) {
     console.error("Error fetching property ID:", error);
@@ -124,7 +129,6 @@ app.get("/auth/google/callback", async (req, res) => {
   }
 });
 
-// Analytics data route
 app.get("/analytics/:userId", async (req, res) => {
   try {
     const user = await User.findById(req.params.userId);
@@ -146,7 +150,7 @@ app.get("/analytics/:userId", async (req, res) => {
     });
 
     const analyticsDataClient = new BetaAnalyticsDataClient({
-      auth: oauth2Client,
+      keyFile: "credentials.json",
     });
 
     const [response] = await analyticsDataClient.runReport({
@@ -192,7 +196,7 @@ app.get("/analytics/:userId", async (req, res) => {
   }
 });
 
-// User details route
+
 app.get("/user/:userId", async (req, res) => {
   try {
     const user = await User.findById(req.params.userId);
@@ -211,7 +215,6 @@ app.get("/user/:userId", async (req, res) => {
   }
 });
 
-// Start the server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
