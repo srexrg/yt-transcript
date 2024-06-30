@@ -1,12 +1,14 @@
 const express = require("express");
 const app = express();
 const cors = require("cors");
+const cookieParser = require("cookie-parser");
 const mongoose = require("mongoose");
 const { OAuth2Client } = require("google-auth-library");
 const { google } = require("googleapis");
 const { BetaAnalyticsDataClient } = require("@google-analytics/data");
 const { AnalyticsAdminServiceClient } = require("@google-analytics/admin");
 
+// CORS configuration
 const corsOptions = {
   origin: "http://localhost:5173",
   credentials: true,
@@ -15,7 +17,9 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.use(express.json());
+app.use(cookieParser());
 
+// MongoDB connection
 mongoose
   .connect(
     "MONGO_URI"
@@ -26,8 +30,14 @@ mongoose
 const User = mongoose.model(
   "User",
   new mongoose.Schema({
-    googleId: String,
+    googleId: { type: String, required: true, unique: true },
+    email: { type: String, unique: true, sparse: true },
+    properties: [
+      {
     propertyId: String,
+        propertyName: String,
+      },
+    ],
     accessToken: String,
     refreshToken: String,
   })
@@ -40,40 +50,52 @@ const oauth2Client = new OAuth2Client(
   "redirect_uri"
 );
 
-async function getFirstPropertyId(authClient) {
+// Function to get all GA4 property IDs and names
+async function getAllPropertyIds(authClient) {
   const analyticsAdmin = new AnalyticsAdminServiceClient({
-   keyFile:'credentials.json'
+    authClient,
   });
 
   try {
     console.log("Fetching GA4 accounts...");
     const [accounts] = await analyticsAdmin.listAccountSummaries();
-    if (accounts && accounts.length > 0) {
-      const accountId = accounts[0].account.split("/")[1];
-      console.log("First Account ID:", accountId);
 
-    console.log("Fetching GA4 properties...");
+    const allProperties = [];
+
+    if (accounts && accounts.length > 0) {
+      for (const account of accounts) {
+        const accountId = account.account.split("/")[1];
+        console.log("Fetching properties for Account ID:", accountId);
+
      const [properties] = await analyticsAdmin.listProperties({
         filter: `ancestor:accounts/${accountId}`,
      });
-    console.log("Properties:", properties);
 
     if (properties && properties.length > 0) {
-        const propertyId = properties[0].name.split("/")[1]; // Extract the property ID
-      console.log("First Property ID:", propertyId);
-      return propertyId;
+          properties.forEach((property) => {
+            const propertyId = property.name.split("/")[1];
+            const propertyName = property.displayName;
+            console.log(
+              "Property ID:",
+              propertyId,
+              "Property Name:",
+              propertyName
+            );
+            allProperties.push({ propertyId, propertyName });
+          });
     } else {
-      console.log("No properties found");
+          console.log(`No properties found for Account ID: ${accountId}`);
+        }
       }
     } else {
       console.log("No accounts found");
     }
-  } catch (error) {
-    console.error("Error fetching property ID:", error);
-  }
 
-  console.log("No property ID found, returning null");
-  return null;
+    return allProperties;
+  } catch (error) {
+    console.error("Error fetching properties:", error);
+    return [];
+  }
 }
 
 app.get("/login", (req, res) => {
@@ -89,6 +111,7 @@ app.get("/login", (req, res) => {
   res.redirect(authUrl);
 });
 
+// Google OAuth callback route
 app.get("/auth/google/callback", async (req, res) => {
   try {
     const { tokens } = await oauth2Client.getToken(req.query.code);
@@ -99,20 +122,21 @@ app.get("/auth/google/callback", async (req, res) => {
 
     console.log("User info:", data);
 
-    const propertyId = await getFirstPropertyId(oauth2Client);
-    console.log("Retrieved property ID:", propertyId);
+    const properties = await getAllPropertyIds(oauth2Client);
+    console.log("Retrieved properties:", properties);
 
     let user = await User.findOne({ googleId: data.id });
     if (!user) {
       user = new User({
         googleId: data.id,
-        propertyId: propertyId,
+        email: data.email,
+        properties: properties, // Store properties
         accessToken: tokens.access_token,
         refreshToken: tokens.refresh_token,
       });
       console.log("Creating new user");
     } else {
-      user.propertyId = propertyId;
+      user.properties = properties; // Update properties
       user.accessToken = tokens.access_token;
       if (tokens.refresh_token) {
         user.refreshToken = tokens.refresh_token;
@@ -122,11 +146,22 @@ app.get("/auth/google/callback", async (req, res) => {
     await user.save();
     console.log("User saved:", user);
 
+    res.cookie("userId", user._id.toString(), {
+      maxAge: 24 * 60 * 60 * 1000,
+      httpOnly: true,
+    });
+
+    console.log("Cookie set:", req.cookies); // Log cookies to verify
     res.redirect(`http://localhost:5173/dashboard?userId=${user._id}`);
   } catch (error) {
     console.error("Error in /auth/google/callback:", error);
     res.status(500).send({ message: "Error authenticating" });
   }
+});
+
+app.get("/logout", (req, res) => {
+  res.clearCookie("userId");
+  res.redirect("http://localhost:5173/login");
 });
 
 app.post("/analytics/:userId", async (req, res) => {
@@ -223,7 +258,6 @@ app.post("/analytics/:userId", async (req, res) => {
   }
 });
 
-
 app.get("/user/:userId", async (req, res) => {
   try {
     const user = await User.findById(req.params.userId);
@@ -232,7 +266,8 @@ app.get("/user/:userId", async (req, res) => {
     }
     res.json({
       googleId: user.googleId,
-      propertyId: user.propertyId,
+      email: user.email,
+      properties: user.properties,
       hasAccessToken: !!user.accessToken,
       hasRefreshToken: !!user.refreshToken,
     });
