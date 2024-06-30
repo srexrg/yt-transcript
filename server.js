@@ -129,7 +129,7 @@ app.get("/auth/google/callback", async (req, res) => {
   }
 });
 
-app.get("/analytics/:userId", async (req, res) => {
+app.post("/analytics/:userId", async (req, res) => {
   try {
     const user = await User.findById(req.params.userId);
 
@@ -137,7 +137,9 @@ app.get("/analytics/:userId", async (req, res) => {
       return res.status(400).send({ message: "User not found" });
     }
 
-    if (!user.propertyId) {
+    const { propertyId, dimensions, metrics } = req.body;
+
+    if (!propertyId) {
       return res.status(400).send({
         message:
           "No Analytics property ID found for this user. Please ensure you have access to a Google Analytics 4 property.",
@@ -150,41 +152,66 @@ app.get("/analytics/:userId", async (req, res) => {
     });
 
     const analyticsDataClient = new BetaAnalyticsDataClient({
-      keyFile: "credentials.json",
+      authClient: oauth2Client,
     });
+
+    const [metadataResponse] = await analyticsDataClient.getMetadata({
+      name: `properties/${propertyId}/metadata`,
+    });
+
+    const availableDimensions = metadataResponse.dimensions.map((dim) => ({
+      name: dim.apiName,
+    }));
+    const availableMetrics = metadataResponse.metrics.map((met) => ({
+      name: met.apiName,
+    }));
+
+    //  console.log("Available dimensions:", availableDimensions);
+    //  console.log("Available metrics:", availableMetrics);
+
+    const dimensionObjects = dimensions.map((name) => ({ name }));
+    const metricObjects = metrics.map((name) => ({ name }));
+
+    const currentDate = new Date().toISOString().split("T")[0];
+
+    console.log("Requesting data from GA4 with the following parameters:");
+    console.log("Property ID:", propertyId);
+    console.log("Date:", currentDate);
+    console.log("Dimensions:", dimensions);
+    console.log("Metrics:", metrics);
 
     const [response] = await analyticsDataClient.runReport({
-      property: `properties/${user.propertyId}`,
+      property: `properties/${propertyId}`,
+      dimensions: dimensionObjects,
+      metrics: metricObjects,
       dateRanges: [
         {
-          startDate: "7daysAgo",
-          endDate: "today",
-        },
-      ],
-      dimensions: [
-        {
-          name: "date",
-        },
-      ],
-      metrics: [
-        {
-          name: "activeUsers",
-        },
-        {
-          name: "screenPageViews",
-        },
-        {
-          name: "sessions",
+          startDate: "yesterday",
+          endDate: "yesterday",
         },
       ],
     });
 
-    const formattedData = response.rows.map((row) => ({
-      date: row.dimensionValues[0].value,
-      activeUsers: parseInt(row.metricValues[0].value),
-      pageviews: parseInt(row.metricValues[1].value),
-      sessions: parseInt(row.metricValues[2].value),
-    }));
+    console.log("Raw response from GA4:", JSON.stringify(response, null, 2));
+
+    if (response.rowCount === 0) {
+      return res
+        .status(204)
+        .send({ message: "No data available for the specified date range." });
+    }
+
+    const formattedData = response.rows.map((row) => {
+      const formattedRow = {};
+      row.dimensionValues.forEach((value, index) => {
+        formattedRow[dimensionObjects[index].name] = value.value;
+      });
+      row.metricValues.forEach((value, index) => {
+        formattedRow[metricObjects[index].name] = parseFloat(value.value);
+      });
+      return formattedRow;
+    });
+
+    console.log("Formatted data:", JSON.stringify(formattedData, null, 2));
 
     res.json(formattedData);
   } catch (error) {
